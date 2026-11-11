@@ -20,7 +20,7 @@ but check the rules where you put one, and tell the people around it what it is.
 Mac or Linux, with [uv](https://docs.astral.sh/uv/):
 
 ```sh
-uv tool install git+https://github.com/lizTheDeveloper/earshot   # (not published yet: from a local clone, `uv tool install .`)
+uv tool install git+https://github.com/lizTheDeveloper/earshot
 ```
 
 On Linux you may also need PortAudio: `sudo apt install libportaudio2`.
@@ -58,7 +58,7 @@ loudest (the simplest "it was nearest here"), and with **three or more listeners
 given**, a rough area:
 
 ```json
-{"roof": [45.5231, -122.6765], "porch": [45.5262, -122.6712], "park": [45.5208, -122.6698]}
+{"roof": [51.4779, -0.0015], "porch": [51.4810, 0.0040], "park": [51.4755, 0.0070]}
 ```
 
 The area comes from the differences in when each listener first heard it: sound travels about 343 m a
