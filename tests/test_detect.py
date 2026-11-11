@@ -93,3 +93,11 @@ def test_event_fields_are_summaries_only():
     rng = np.random.default_rng(11)
     e = run(noise(12, rng) + drone(12, rng, level=0.01))[0]
     assert set(e.to_record("n1", 0.0)) == {"start", "end", "node", "confidence", "f0_hz", "harmonics", "level_db", "wobble"}
+
+
+@pytest.mark.parametrize("firing", [45.0, 60.0])
+def test_a_slow_engine_heard_at_a_high_harmonic_is_nothing(firing):
+    # a lawnmower-like engine: its comb is so fine (22–30 Hz) that a drone-range pitch lands on its
+    # 15th–20th order, with no gaps between its own harmonics
+    rng = np.random.default_rng(int(firing))
+    assert run(noise(60, rng) + engine(60, rng, f0=firing)) == []

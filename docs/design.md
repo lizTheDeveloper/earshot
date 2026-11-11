@@ -32,8 +32,10 @@ that cities and militaries already run — without building a neighbourhood eave
   ≥ 2.5 s of continuous track with ≥ 4 harmonics; ends after 1.5 s without.
 - Discriminators (each lowers confidence or rejects):
   - mains hum: f0 locked within 0.5 Hz of a 50/60 Hz multiple with almost no wobble → reject;
-  - piston engines: firing produces half-order components (energy at odd multiples of f0/2);
-    multirotors don't → penalise strong half-orders;
+  - piston engines: the chosen pitch is one order of a finer comb (firing orders, spacing f0/n down
+    to 20 Hz) whose in-between positions are filled; multirotors leave them mostly empty → penalise
+    (measured share: drones ~0.2, engines ~1.0);
+  - coverage: the comb must be found in ≥ 60 % of an event's hops (scattered chance fits are not);
   - wobble: multirotor pitch is never perfectly steady (attitude control), fans/motors on mains
     nearly are → penalise very low wobble;
   - speech: voiced pitch jumps by >4 % between hops and stops within a second, so the

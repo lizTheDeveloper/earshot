@@ -35,6 +35,7 @@ MIN_SCORE = 12.0
 TRACK_JUMP = 0.07
 GAP_S = 1.5
 MIN_EVENT_S = 2.5
+MIN_COVERAGE = 0.6  # share of an event's hops in which its comb was actually found
 BACKGROUND_S = 120.0
 MIN_WOBBLE = 0.0015  # 0.15 %: a mains-locked or steady-speed motor is steadier than this; a drone isn't
 FULL_WOBBLE = 0.004
@@ -66,7 +67,7 @@ class _Cand:
     f0: float
     score: float
     hits: int
-    half: float  # share of the in-between positions (f0/2 … f0/6 combs) that also have a peak (0 = none)
+    half: float  # share of in-between positions of the best finer comb (f0/n) that have a peak (0 = none)
 
 
 @dataclass
@@ -96,14 +97,6 @@ class Detector:
         ks = np.arange(1, MAX_HARM + 1)
         self.kmask = ks[None, :] <= K[:, None]
         self.hidx = np.clip(np.rint((self.f0s[:, None] * ks[None, :] - self.f[0]) / self.df).astype(int), 0, len(self.f) - 1)
-        # between the harmonics at 1/2, 1/3 and 1/4 of f0 (a finer comb underneath: an engine's firing
-        # orders, or a lawnmower's 25 Hz comb seen at its 4th or 6th harmonic)
-        self.between = []
-        for m in (2, 3, 4, 5, 6):
-            pos = np.array([k + j / m for k in range(8) for j in range(1, m)])
-            mask = pos[None, :] <= np.minimum(8, K)[:, None]
-            idx = np.clip(np.rint((self.f0s[:, None] * pos[None, :] - self.f[0]) / self.df).astype(int), 0, len(self.f) - 1)
-            self.between.append((mask, idx))
         self.bg = np.zeros(len(self.f), np.float32)
         self.alpha = HOP_S / BACKGROUND_S
         self.buf = np.zeros(0, np.float32)
@@ -188,10 +181,25 @@ class Detector:
             if any(_related(f0, c.f0) for c in chosen):
                 continue
             hit = self.kmask[j] & (H[j] >= HIT_DB)
-            hh = max(((W3[idx[j]][mask[j]] >= HIT_DB).mean() for mask, idx in self.between if mask[j].any()),
-                     default=0.0)
-            chosen.append(_Cand(self._refine(f0, L, hit), float(s[j]), int(hits[j]), float(hh)))
+            f0r = self._refine(f0, L, hit)
+            hh = self._finer_comb(f0r, W3)
+            chosen.append(_Cand(f0r, float(s[j]), int(hits[j]), float(hh)))
         return chosen
+
+    def _finer_comb(self, f0: float, W3: np.ndarray) -> float:
+        """Is this pitch one order of a finer comb (spacing f0/n, down to 20 Hz)? The share of the
+        in-between positions k·f0/n (k not a multiple of n, up to 1.5 kHz) that have a peak, best over n.
+        A piston engine's firing orders fill them (~1.0); a multirotor leaves them mostly empty (~0.2)."""
+        best = 0.0
+        for n in range(2, int(f0 // 20) + 1):
+            k = np.arange(1, int(1500 * n // f0) + 1)
+            k = k[k % n != 0]
+            if len(k) < 4:
+                continue
+            idx = np.rint((k * f0 / n - self.f[0]) / self.df).astype(int)
+            idx = idx[(idx >= 0) & (idx < len(W3))]
+            best = max(best, float((W3[idx] >= HIT_DB).mean()))
+        return best
 
     def _refine(self, f0: float, L: np.ndarray, hit: np.ndarray) -> float:
         """Pitch to a fraction of a hertz: parabolic peak of each hit harmonic, divided by its number."""
@@ -243,6 +251,8 @@ class Detector:
     def _finish(self, tr: _Track) -> Event | None:
         if not tr.t or tr.t[-1] - tr.t[0] + HOP_S < MIN_EVENT_S:
             return None
+        if len(tr.t) < MIN_COVERAGE * (tr.t[-1] - tr.t[0] + HOP_S) / HOP_S:
+            return None  # a few scattered frames that happen to line up, not a sound that's there
         f0 = np.array(tr.f0)
         lf = np.log(f0)
         # wobble: pitch scatter around a slow trend (a fly-past's Doppler sweep is a trend, not wobble)
