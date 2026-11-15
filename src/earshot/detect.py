@@ -34,11 +34,12 @@ MIN_HITS = 4
 MIN_SCORE = 12.0
 TRACK_JUMP = 0.07
 GAP_S = 1.5
-MIN_EVENT_S = 2.5
+MIN_EVENT_S = 5.0  # real drones are heard for minutes; short tracks were mostly music and passing sounds
 MIN_COVERAGE = 0.6  # share of an event's hops in which its comb was actually found
 BACKGROUND_S = 120.0
 MIN_WOBBLE = 0.0015  # 0.15 %: a mains-locked or steady-speed motor is steadier than this; a drone isn't
 FULL_WOBBLE = 0.004
+MIN_JITTER = 0.002  # 0.2 % median pitch change per hop: a flight controller never holds rotors this still
 CONFIDENCE = 0.5
 
 
@@ -68,6 +69,7 @@ class _Cand:
     score: float
     hits: int
     half: float  # share of in-between positions of the best finer comb (f0/n) that have a peak (0 = none)
+    span: int  # harmonics 1..span scored: the run that scores best, since far away the upper ones fade
 
 
 @dataclass
@@ -77,6 +79,7 @@ class _Track:
     hits: list = field(default_factory=list)
     score: list = field(default_factory=list)
     half: list = field(default_factory=list)
+    span: list = field(default_factory=list)
     level: list = field(default_factory=list)
     last: int = 0
 
@@ -168,8 +171,15 @@ class Detector:
     def _candidates(self, W: np.ndarray, L: np.ndarray) -> list[_Cand]:
         W3 = maximum_filter1d(W, 3)
         H = W3[self.hidx]
-        s = np.where(self.kmask, np.clip(H - HIT_DB, -6, 14), 0).sum(axis=1)
-        hits = np.where(self.kmask, H >= HIT_DB, False).sum(axis=1)
+        # score harmonics 1..n for the n that scores best (n ≥ MIN_HITS): a distant drone keeps only its
+        # first few, and charging it for the missing upper ones up to 4 kHz would sink a clear comb.
+        # Misses inside the run still cost, which keeps octave-down pitches from winning.
+        cs = np.cumsum(np.where(self.kmask, np.clip(H - HIT_DB, -6, 14), 0), axis=1)
+        cs = np.where(self.kmask & (np.arange(MAX_HARM) >= MIN_HITS - 1)[None, :], cs, -np.inf)
+        span = np.argmax(cs, axis=1) + 1
+        s = cs[np.arange(len(cs)), span - 1]
+        inrun = np.arange(1, MAX_HARM + 1)[None, :] <= span[:, None]
+        hits = (inrun & self.kmask & (H >= HIT_DB)).sum(axis=1)
         order = np.argsort(-s)
         chosen: list[_Cand] = []
         for j in order[:400]:
@@ -180,10 +190,10 @@ class Detector:
             f0 = self.f0s[j]
             if any(_related(f0, c.f0) for c in chosen):
                 continue
-            hit = self.kmask[j] & (H[j] >= HIT_DB)
+            hit = self.kmask[j] & (H[j] >= HIT_DB) & inrun[j]
             f0r = self._refine(f0, L, hit)
             hh = self._finer_comb(f0r, W3)
-            chosen.append(_Cand(f0r, float(s[j]), int(hits[j]), float(hh)))
+            chosen.append(_Cand(f0r, float(s[j]), int(hits[j]), float(hh), int(span[j])))
         return chosen
 
     def _finer_comb(self, f0: float, W3: np.ndarray) -> float:
@@ -237,6 +247,7 @@ class Detector:
             best.hits.append(c.hits)
             best.score.append(c.score)
             best.half.append(c.half)
+            best.span.append(c.span)
             best.level.append(level)
             best.last = self.n
         alive = []
@@ -260,9 +271,17 @@ class Detector:
         trend = np.polyval(np.polyfit(tt, lf, 2), tt) if len(tt) >= 4 else lf.mean()
         wobble = float(np.std(lf - trend))
         hits = float(np.median(tr.hits))
-        K = min(MAX_HARM, int(4000 // np.median(f0)))
+        K = max(MIN_HITS, float(np.median(tr.span)))
         strength = 0.5 * min(1.0, hits / K / 0.6) + 0.5 * min(1.0, float(np.median(tr.score)) / (8.0 * K))
         steady = np.clip((wobble - MIN_WOBBLE) / (FULL_WOBBLE - MIN_WOBBLE), 0, 1)
+        # jitter: the pitch change from one hop to the next. A note is held flat and then steps, so music
+        # can 'wobble' as much as a drone over a track while barely moving hop to hop; a multirotor's
+        # speeds are nudged by its flight controller many times a second and never sit still. On real
+        # recordings (Salford drones vs Free Music Archive) the median was 0.44 % for drones, 0.13 % for music.
+        adj = np.diff(tt) <= HOP_S * 1.5
+        jitter = float(np.median(np.abs(np.diff(lf))[adj])) if adj.any() else 0.0
+        if jitter < MIN_JITTER:
+            return None
         half = float(np.median(tr.half))
         engine = np.clip((0.7 - half) / 0.3, 0, 1)  # drones measured ~0.2, engines ~1.0
         dur = tt[-1] - tt[0] + HOP_S

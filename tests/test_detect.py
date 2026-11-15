@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from conftest import SR, drone, engine, fan, hum, noise, speech_like
+from conftest import SR, bassline, drone, engine, fan, hum, noise, speech_like
 from earshot.detect import Detector, Event, detect_all
 
 
@@ -101,3 +101,24 @@ def test_a_slow_engine_heard_at_a_high_harmonic_is_nothing(firing):
     # 15th–20th order, with no gaps between its own harmonics
     rng = np.random.default_rng(int(firing))
     assert run(noise(60, rng) + engine(60, rng, f0=firing)) == []
+
+
+@pytest.mark.parametrize("f0", [200.0, 330.0, 450.0])
+def test_a_distant_drone_with_only_its_low_harmonics_is_found(f0):
+    # far away, the air and a phone mic take the upper harmonics: only the first four are left
+    rng = np.random.default_rng(int(f0) + 7)
+    ev = run(noise(14, rng) + drone(14, rng, f0=f0, harmonics=4, level=0.01))
+    assert len(ev) == 1 and abs(ev[0].f0_hz - f0) / f0 < 0.06
+
+
+def test_a_stepping_bass_line_is_nothing():
+    # music: notes held flat between steps; the steps alone make it 'wobble' like a drone would
+    for seed in range(4):
+        rng = np.random.default_rng(100 + seed)
+        assert run(noise(30, rng) + bassline(30, rng, root=rng.uniform(80, 130))) == []
+
+
+def test_a_drone_heard_over_a_bass_line_is_still_found():
+    rng = np.random.default_rng(11)
+    ev = run(noise(20, rng) + bassline(20, rng, root=98.0, level=0.01) + drone(20, rng, f0=230, harmonics=5, level=0.012))
+    assert any(abs(e.f0_hz - 230) / 230 < 0.06 for e in ev)

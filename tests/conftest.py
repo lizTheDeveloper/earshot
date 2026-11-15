@@ -58,7 +58,9 @@ def drone(seconds, rng, f0=180.0, rotors=4, harmonics=18, level=0.02, wobble=0.0
     amps = [1.0 / k ** 0.6 for k in range(1, harmonics + 1)]
     for i in range(rotors):
         fi = f0 * (1 + rng.uniform(-0.03, 0.03))
-        wob = 1 + wobble * _smooth_noise(rng, n, SR * 0.3)
+        # speed changes on two timescales: slow drift (attitude, wind) and the flight controller's fast
+        # corrections. Real recordings (Salford DroneNoise) move ~0.4 % per quarter second, median.
+        wob = 1 + wobble * _smooth_noise(rng, n, SR * 0.3) + 0.3 * wobble * _smooth_noise(rng, n, SR * 0.05)
         out += _comb(fi * wob * dop, amps) * (1 + 0.2 * _smooth_noise(rng, n, SR * 0.5))
     out *= gain
     return (level * out / np.std(out)).astype(np.float32)
@@ -106,3 +108,19 @@ def speech_like(seconds, rng, level=0.03):
         out[i:i + dur] += seg
         i += dur + gap
     return (level * out / (np.std(out) + 1e-12)).astype(np.float32)
+
+
+def bassline(seconds, rng, root=87.3, level=0.02):
+    """A synth bass line: notes on the equal-tempered scale, each held dead flat for 0.4–1.5 s and stepping
+    by one or two semitones (close enough that a tracker links them into one wobbling 'pitch')."""
+    n = int(seconds * SR)
+    f = np.empty(n)
+    i = 0
+    semis = 0
+    while i < n:
+        d = int(rng.uniform(0.4, 1.5) * SR)
+        f[i:i + d] = root * 2 ** (semis / 12)
+        semis = int(np.clip(semis + rng.choice([-2, -1, 1, 2]), -3, 3))
+        i += d
+    out = _comb(f, [1.0 / k ** 0.8 for k in range(1, 16)])
+    return (level * out / np.std(out)).astype(np.float32)
