@@ -77,10 +77,12 @@ rotors run at slightly different speeds that the flight controller keeps adjusti
 that, every quarter second:
 
 1. finds harmonic ladders with a fundamental from 80 to 600 Hz and at least 4 harmonics clearly above
-   the local noise floor;
+   the local noise floor, scored over the run of harmonics that is actually there (far away, the air
+   and a phone's microphone take the upper ones);
 2. follows each one over time, allowing for Doppler and throttle changes;
-3. calls it a possible drone if it lasts at least 2.5 s, and its pitch wobbles the way a flight
-   controller makes it wobble;
+3. calls it a possible drone if it lasts at least 5 s, its pitch wobbles the way a flight controller
+   makes it wobble, and it keeps moving from one quarter second to the next (music holds each note
+   dead flat and then steps, so a bass line can wobble as much as a drone without that jitter);
 4. turns it down if the pitch is perfectly steady (fans, pumps, transformers, mains hum), or if the
    ladder is really part of a finer one (a piston engine's firing orders: mowers, leaf blowers,
    motorbikes, generators).
@@ -91,23 +93,61 @@ fades too.
 
 ## How well it works
 
-Measured on **synthetic** sounds only (`uv run python scripts/evaluate.py`): simulated multirotors
-with 2–6 rotors, 80–600 Hz, random wobble, half of them flying past, in pinkish background noise.
+### On real recordings
+
+`uv run python scripts/evaluate_real.py <data folder>` (data not in this repo; sources and licences in
+the script). Two drone datasets and two sets of non-drone sound:
+
+- **DroneNoise Database**, University of Salford (CC BY 4.0): 4 quadcopters (two of 249 g, one of 795 g,
+  one of 6.3 kg) flying past at 15 m/s and hovering, 10 m up, recorded by 9 ground microphones.
+- **Drone detection dataset**, Svanström et al. 2020 (CC0): 10 s clips from a ground microphone of
+  drones out to ~200 m, helicopters, and background.
+- **Free Music Archive** (one shard, ~530 tracks of every genre, 4.4 h) and **ESC-50** everyday sounds.
+
+| | detected |
+|---|---|
+| Salford recordings (fly-past and hover, all 9 mics) | 125 / 164 |
+| ... of which one of the 249 g quadcopters flying past at 15 m/s | 2 / 27 |
+| Svanström drone clips (10 s, out to ~200 m) | 10 / 30 |
+| Svanström helicopter clips | 5 / 30 |
+
+Distance, simulated from the Salford recordings (spreading loss and air absorption added, real
+outdoor ambience held at the recording's own level; quick subset of 55 recordings):
+
+| about | 10 m | 50 m | 100 m | 200 m | 300 m |
+|---|---|---|---|---|---|
+| detected | 41 / 55 | 32 / 55 | 24 / 55 | 15 / 55 | 8 / 55 |
+
+The same drones mixed into real music, and into crowd/street sound (ESC-50), at a given loudness ratio
+(80 Hz–4 kHz): +6 dB 18/29 and 18/29, 0 dB 15/29 and 13/29, −6 dB 7/29 and 8/29, −12 dB 5/29 and 6/29.
+
+False alarms: **about 19 an hour on music** (83 in 4.4 h of FMA, all genres: held synth and bass notes,
+drones in the musical sense, organ), none on the 30 background clips, none on 2.7 h of ESC-50 everyday
+sounds (those clips are only 5 s, shorter than an event, so that number says little).
+
+Before this tuning (scoring over every harmonic to 4 kHz, 2.5 s events) it found 88/164 Salford
+recordings and 5/30 Svanström drones, fired on 3/30 background clips, and gave ~80 false alarms an
+hour on music.
+
+**Near music, expect false alarms.** `--threshold 0.7` roughly halves them (to ~9–15 an hour) and
+misses more drones (Salford ~117/164, Svanström 6/30). A single node's event means "go and look";
+several nodes hearing the same thing at once (`earshot merge`) is much stronger evidence.
+
+### On synthetic sounds
+
+`uv run python scripts/evaluate.py`: simulated multirotors with 2–6 rotors, 80–600 Hz, random wobble,
+half of them flying past, in pinkish background noise.
 
 | drone loudness vs background (80 Hz–4 kHz) | detected |
 |---|---|
-| +5 dB | 30 / 30 |
-| 0 dB | 30 / 30 |
+| +5 dB | 28 / 30 |
+| 0 dB | 27 / 30 |
 | −5 dB | 26 / 30 |
-| −10 dB | 10 / 30 |
+| −10 dB | 6 / 30 |
 | −15 dB | 0 / 30 |
 
 False alarms on 2 hours of simulated non-drone sound (noise, talking, 50 and 60 Hz mains hum, fans at
 80–400 Hz, piston engines firing at 25–160 Hz): **none**.
-
-It has **not been tested on real recordings yet**. The one public drone-sound dataset we found forbids
-security and surveillance uses, so we didn't use it. Real numbers need real drones; treat every
-detection as "go and look", not as a fact.
 
 ## What it can't tell apart (yet)
 
@@ -115,11 +155,16 @@ detection as "go and look", not as a fact.
   motorbikes revving) can look like a drone.
 - **Electric motors that change speed**: e-bikes and scooters accelerating, power tools, some fans on
   variable controllers, an electric RC car.
-- **Music** with a sustained note, especially synthesisers; a **wobbly whistle**.
+- **Music**: about 19 false alarms an hour on real music (see above), mostly long held synth, bass and
+  organ notes with vibrato. A drone heard *over* music is found less often too: the music's notes
+  take the detector's attention. A **wobbly whistle**.
 - **Fixed-wing and engine-powered drones** don't make the multirotor sound and are mostly missed, apart
   from very loud ones.
-- **Far-away drones**: a small quadcopter is usually audible over 100–300 m outdoors in a quiet place,
-  much less near traffic.
+- **Far-away and small drones**: in the simulation above about half of the recordings were still found
+  at 100 m and a quarter at 200 m in quiet countryside; far less near traffic or music. One of the
+  smallest drones tested (249 g) was rarely found flying past even at 10 m; hovering, it was.
+- **Short sounds**: an event needs 5 s, so a drone that passes quickly, or a phone clip a few seconds
+  long, is not enough.
 - **A drone hovering for minutes** fades into the background estimate.
 
 ## Files
